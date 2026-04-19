@@ -50,11 +50,13 @@ def format_ohlcv(candles: list[dict]) -> str:
 
 
 def format_tweets(tweets: list[dict]) -> str:
-    lines = []
-    for t in tweets:
-        text = t['text'].replace('\n', ' ').replace('\r', '')
-        lines.append(f"@{t['userName']}: \"{text}\" ({t['likeCount']} likes)")
-    return "# X Tweets\n" + "\n".join(lines)
+    sorted_tweets = sorted(tweets, key=lambda t: t.get("createdAt", ""), reverse=True)[:5]
+    sorted_tweets = sorted(sorted_tweets, key=lambda t: t.get("createdAt", ""))
+    items = [
+        {"userName": t["userName"], "tweet": t["text"], "createdAt": t.get("createdAt", "")}
+        for t in sorted_tweets
+    ]
+    return "# X Tweets\n" + json.dumps(items, ensure_ascii=False, indent=2)
 
 
 def main():

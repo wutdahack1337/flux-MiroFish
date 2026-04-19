@@ -128,16 +128,23 @@ def extract_latest_timestamp(seed_text):
 
 
 def extract_timestamp_from_seed_path(seed_path):
-    """Extract Unix seconds from seed filename pattern: seed_YYYY-MM-DDTHH.md.
+    """Extract Unix seconds from seed filename.
 
-    Returns None if pattern is not matched.
+    Supports:
+      seed_YYYY-MM-DDTHH.md
+      YYYY-MM-DD-HH-MM.md
+    Returns None if no pattern matches.
     """
     base = os.path.basename(seed_path)
-    match = re.search(r"seed_(\d{4}-\d{2}-\d{2}T\d{2})\.md$", base)
-    if not match:
-        return None
-    dt = datetime.strptime(match.group(1), "%Y-%m-%dT%H").replace(tzinfo=timezone.utc)
-    return int(dt.timestamp())
+    m = re.search(r"seed_(\d{4}-\d{2}-\d{2}T\d{2})\.md$", base)
+    if m:
+        dt = datetime.strptime(m.group(1), "%Y-%m-%dT%H").replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    m = re.search(r"(\d{4}-\d{2}-\d{2})-(\d{2})-(\d{2})\.md$", base)
+    if m:
+        dt = datetime.strptime(f"{m.group(1)} {m.group(2)}:{m.group(3)}", "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    return None
 
 
 def _format_chart_time(ts):

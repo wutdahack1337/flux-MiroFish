@@ -105,10 +105,15 @@ def insert_summary_before_b_lines(csv_path: str, total_runtime_mins: float, mae:
 
 # ── Pipeline steps ────────────────────────────────────────────────────────────
 
-def step_fetch_ohlcv(interval: str, limit: int) -> list:
-    """Fetch limit+1 candles from Binance."""
-    raw = fetch_klines("BTCUSDT", interval, limit + 1)
-    return [extract_candle(c) for c in raw]
+def step_fetch_ohlcv(interval: str, limit: int, latest_time: datetime) -> list:
+    """Fetch limit+1 candles pinned to latest_time (seed) + one actual candle."""
+    raw = fetch_klines("BTCUSDT", interval, limit + 2)
+    candles = [extract_candle(c) for c in raw]
+    latest_str = latest_time.strftime("%Y-%m-%d %H:%M")
+    seed_end = next((i for i, c in enumerate(candles) if c["time"] == latest_str), None)
+    if seed_end is None:
+        raise ValueError(f"latest_time {latest_str} not found in fetched candles")
+    return candles[seed_end - limit + 1 : seed_end + 2]
 
 
 def step_write_ohlcv(seed_candles: list, latest_time: datetime, interval: str) -> str:
@@ -138,7 +143,7 @@ def step_gen_seed(seed_candles: list, tweets_path: str, latest_time: datetime) -
     with open(tweets_path, encoding="utf-8") as f:
         tweets = json.load(f)
 
-    chart_time   = seed_candles[-1]["time"]
+    chart_time   = latest_time.strftime("%Y-%m-%d %H:%M")
     latest_price = seed_candles[-1]["close"]
     agents_text  = load_agents(os.path.join(project_root, "agents.txt"))
 
@@ -218,16 +223,21 @@ def main():
     print("=" * 60)
 
     print("[1/5] Fetching OHLCV...")
-    all_candles = step_fetch_ohlcv(args.interval, args.limit)
+    all_candles = step_fetch_ohlcv(args.interval, args.limit, latest_time)
     seed_candles, actual_candle, prev_mid = split_candles(all_candles, args.limit)
     ohlcv_path = step_write_ohlcv(seed_candles, latest_time, args.interval)
     print(f"  → {ohlcv_path} ({len(seed_candles)} candles)")
     print(f"  actual: low={actual_candle['low']} high={actual_candle['high']}")
     print(f"  prev_mid={prev_mid:.2f}")
 
-    print("[2/5] Fetching tweets...")
-    tweets_path = step_fetch_tweets(latest_time, interval_secs)
-    print(f"  → {tweets_path}")
+    expected_tweets = os.path.join(project_root, "research", "tweets", f"{dt_to_filename(latest_time)}.json")
+    if os.path.exists(expected_tweets):
+        tweets_path = expected_tweets
+        print(f"[2/5] Tweets already cached → {tweets_path}")
+    else:
+        print("[2/5] Fetching tweets...")
+        tweets_path = step_fetch_tweets(latest_time, interval_secs)
+        print(f"  → {tweets_path}")
 
     print("[3/5] Generating seed...")
     seed_path = step_gen_seed(seed_candles, tweets_path, latest_time)

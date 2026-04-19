@@ -2,13 +2,17 @@
 """Calculate AE and DA metrics from a forecast CSV.
 
 Metrics per row:
-  AE  = |predicted_low - actual_low| + |predicted_high - actual_high|
-  DA  = 1 if sign(actual_mid - prev_mid) == sign(predicted_mid - prev_mid) else 0
-        (skipped when prev_mid is missing)
+  AE     = |predicted_low - actual_low| + |predicted_high - actual_high|
+  DA     = 1 if sign(actual_mid - prev_mid) == sign(predicted_mid - prev_mid) else 0
+           (skipped when prev_mid is missing)
+  e_low  = (predicted_low  - actual_low)  / actual_low
+  e_high = (predicted_high - actual_high) / actual_high
 
 Summary (appended to CSV):
-  MAE = mean AE across rows with full actual data
-  MDA = mean DA across rows with prev_mid available
+  MAE    = mean AE across rows with full actual data
+  MDA    = mean DA across rows with prev_mid available
+  b_low  = median(e_low)
+  b_high = median(e_high)
 """
 
 import argparse
@@ -46,8 +50,14 @@ def evaluate_row(row):
     prev_mid = parse_float(row.get("prev_mid"))
 
     ae = None
+    e_low = None
+    e_high = None
     if None not in (predicted_low, predicted_high, actual_low, actual_high):
         ae = abs(predicted_low - actual_low) + abs(predicted_high - actual_high)
+        if actual_low != 0:
+            e_low = (predicted_low - actual_low) / actual_low
+        if actual_high != 0:
+            e_high = (predicted_high - actual_high) / actual_high
 
     da = None
     if None not in (predicted_low, predicted_high, actual_low, actual_high, prev_mid):
@@ -55,7 +65,7 @@ def evaluate_row(row):
         predicted_mid = (predicted_low + predicted_high) / 2
         da = 1 if sign(actual_mid - prev_mid) == sign(predicted_mid - prev_mid) else 0
 
-    return ae, da
+    return ae, da, e_low, e_high
 
 
 def main():
@@ -98,22 +108,30 @@ def main():
 
     ae_values = []
     da_values = []
+    e_low_values = []
+    e_high_values = []
     results = []
 
     for row in rows:
-        ae, da = evaluate_row(row)
-        results.append((row, ae, da))
+        ae, da, e_low, e_high = evaluate_row(row)
+        results.append((row, ae, da, e_low, e_high))
         if ae is not None:
             ae_values.append(ae)
         if da is not None:
             da_values.append(da)
+        if e_low is not None:
+            e_low_values.append(e_low)
+        if e_high is not None:
+            e_high_values.append(e_high)
 
     mae = sum(ae_values) / len(ae_values) if ae_values else None
     mda = sum(da_values) / len(da_values) if da_values else None
+    b_low = sum(e_low_values) / len(e_low_values) * 10000 if e_low_values else None  # bps
+    b_high = sum(e_high_values) / len(e_high_values) * 10000 if e_high_values else None  # bps
 
-    # Build output fieldnames: insert 'ae' and 'da' after 'runtime' if present, else append
+    # Build output fieldnames: insert metrics after 'runtime' if present, else append
     out_fields = list(fieldnames)
-    to_add = [m for m in ("ae", "da") if m not in out_fields]
+    to_add = [m for m in ("ae", "da", "e_low", "e_high") if m not in out_fields]
     if to_add:
         if "runtime" in out_fields:
             idx = out_fields.index("runtime") + 1
@@ -126,16 +144,26 @@ def main():
     with open(args.csv_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=out_fields, extrasaction="ignore")
         writer.writeheader()
-        for row, ae, da in results:
+        for row, ae, da, e_low, e_high in results:
             row["ae"] = "" if ae is None else f"{ae:.4f}"
             row["da"] = "" if da is None else da
+            row["e_low"] = "" if e_low is None else f"{e_low:.6f}"
+            row["e_high"] = "" if e_high is None else f"{e_high:.6f}"
             writer.writerow(row)
 
         f.write("\n")
         for line in summary_lines:
             cols = line.strip().split(",")
-            if len(cols) == 2:
+            if len(cols) == 2 and cols[0] not in ("b_low", "b_high"):
                 f.write(line)
+        if b_low is not None:
+            f.write(f"b_low,{b_low:.2f}bps\n")
+        else:
+            f.write("b_low,NA\n")
+        if b_high is not None:
+            f.write(f"b_high,{b_high:.2f}bps\n")
+        else:
+            f.write("b_high,NA\n")
 
     print(f"evaluated_rows={len(ae_values)}")
     print(f"da_rows={len(da_values)}")
@@ -147,6 +175,14 @@ def main():
         print(f"MDA={mda:.6f}")
     else:
         print("MDA=NA")
+    if b_low is not None:
+        print(f"b_low={b_low:.2f}bps")
+    else:
+        print("b_low=NA")
+    if b_high is not None:
+        print(f"b_high={b_high:.2f}bps")
+    else:
+        print("b_high=NA")
 
 
 if __name__ == "__main__":
