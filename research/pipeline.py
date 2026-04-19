@@ -1,0 +1,263 @@
+# research/pipeline.py
+"""
+MiroFish Realtime Pipeline
+Fetches OHLCV + tweets → seed → simulation → metrics → predictions CSV.
+
+Usage:
+    python3 research/pipeline.py [--latest-time YYYY-MM-DD-HH-MM] [--interval 1h|30m] [--limit N]
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
+
+from get_realtime_ohlcv import fetch_klines, extract as extract_candle
+from get_realtime_tweets import fetch_tweets, build_query, DEFAULT_ACCOUNTS, DEFAULT_QUERY
+from get_realtime_tweets import extract as extract_tweet
+from gen_realtime_seed import format_ohlcv, format_tweets, load_agents
+
+BACKEND_PYTHON = os.path.join(project_root, "backend", ".venv", "bin", "python3")
+RUN_TRADE      = os.path.join(project_root, "backend", "scripts", "run_trade.py")
+CALC_METRICS   = os.path.join(project_root, "backend", "scripts", "calc_metrics.py")
+
+
+# ── Pure helpers ──────────────────────────────────────────────────────────────
+
+def interval_to_seconds(interval: str) -> int:
+    if interval.endswith("h"):
+        return int(interval[:-1]) * 3600
+    if interval.endswith("m"):
+        return int(interval[:-1]) * 60
+    raise ValueError(f"Unknown interval: {interval}")
+
+
+def floor_to_interval(dt: datetime, interval_secs: int) -> datetime:
+    ts = int(dt.timestamp())
+    floored = (ts // interval_secs) * interval_secs
+    return datetime.fromtimestamp(floored, tz=timezone.utc)
+
+
+def compute_latest_time(interval: str, now: datetime = None) -> datetime:
+    if now is None:
+        now = datetime.now(timezone.utc)
+    secs = interval_to_seconds(interval)
+    floored = floor_to_interval(now, secs)
+    return floored - timedelta(seconds=2 * secs)
+
+
+def dt_to_filename(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%d-%H-%M")
+
+
+def tweet_time_window(latest_time: datetime, limit: int, interval_secs: int):
+    """Return (since_time, until_time) as Unix seconds for the tweet query window.
+
+    since = latest_time - (limit-1) * interval  (start of oldest seed candle)
+    until = latest_time + interval               (end of latest seed candle)
+    """
+    since = int((latest_time - timedelta(seconds=(limit - 1) * interval_secs)).timestamp())
+    until = int((latest_time + timedelta(seconds=interval_secs)).timestamp())
+    return since, until
+
+
+def split_candles(candles: list, limit: int):
+    """Split limit+1 fetched candles into (seed_candles, actual_candle, prev_mid).
+
+    seed_candles  = candles[:limit]    written to ohlcv file + seed
+    actual_candle = candles[-1]        prediction target (actual low/high)
+    prev_mid      = mid of candles[limit-2]  T-1 candle, used for DA metric
+    """
+    seed_candles  = candles[:limit]
+    actual_candle = candles[-1]
+    t_minus_1     = candles[limit - 2]
+    prev_mid      = (t_minus_1["low"] + t_minus_1["high"]) / 2
+    return seed_candles, actual_candle, prev_mid
+
+
+def prepend_config(csv_path: str, latest_time: datetime, interval: str, limit: int) -> None:
+    with open(csv_path, "r", encoding="utf-8") as f:
+        original = f.read()
+    config = (
+        f"# latest_time={dt_to_filename(latest_time)}\n"
+        f"# interval={interval}\n"
+        f"# limit={limit}\n"
+    )
+    with open(csv_path, "w", encoding="utf-8") as f:
+        f.write(config + original)
+
+
+def insert_summary_before_b_lines(csv_path: str, total_runtime_mins: float, mae: str, mda: str) -> None:
+    """Insert total_runtime_mins/MAE/MDA before b_low/b_high lines written by calc_metrics."""
+    with open(csv_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    b_idx   = next((i for i, l in enumerate(lines) if l.strip().startswith("b_low")), len(lines))
+    summary = [
+        f"\ntotal_runtime_mins,{total_runtime_mins:.1f}\n",
+        f"MAE,{mae}\n",
+        f"MDA,{mda}\n",
+    ]
+    lines = lines[:b_idx] + summary + lines[b_idx:]
+    with open(csv_path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+
+# ── Pipeline steps ────────────────────────────────────────────────────────────
+
+def step_fetch_ohlcv(interval: str, limit: int) -> list:
+    """Fetch limit+1 candles from Binance."""
+    raw = fetch_klines("BTCUSDT", interval, limit + 1)
+    return [extract_candle(c) for c in raw]
+
+
+def step_write_ohlcv(seed_candles: list, latest_time: datetime, interval: str) -> str:
+    out_dir  = os.path.join(project_root, "research", "ohlcv")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{dt_to_filename(latest_time)}-{interval}.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(seed_candles, f, ensure_ascii=False, indent=2)
+    return out_path
+
+
+def step_fetch_tweets(latest_time: datetime, limit: int, interval_secs: int) -> str:
+    since, until = tweet_time_window(latest_time, limit, interval_secs)
+    full_query   = build_query(DEFAULT_ACCOUNTS, DEFAULT_QUERY, since, until)
+    tweets_raw   = fetch_tweets(full_query)
+    tweets       = [extract_tweet(t) for t in tweets_raw]
+
+    out_dir  = os.path.join(project_root, "research", "tweets")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{dt_to_filename(latest_time)}.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(tweets, f, ensure_ascii=False, indent=2)
+    return out_path
+
+
+def step_gen_seed(seed_candles: list, tweets_path: str, latest_time: datetime) -> str:
+    with open(tweets_path, encoding="utf-8") as f:
+        tweets = json.load(f)
+
+    chart_time   = seed_candles[-1]["time"]
+    latest_price = seed_candles[-1]["close"]
+    agents_text  = load_agents(os.path.join(project_root, "agents.txt"))
+
+    content = "\n\n".join([
+        f"# Latest Chart Time\n{chart_time}",
+        f"# Latest BTC Price\n{latest_price}",
+        format_ohlcv(seed_candles),
+        format_tweets(tweets),
+        "# Agents Population\n" + agents_text,
+    ]) + "\n"
+
+    out_dir  = os.path.join(project_root, "research", "seeds")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{dt_to_filename(latest_time)}.md")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return out_path
+
+
+def step_run_trade(seed_path: str, output_csv: str,
+                   actual_low: float, actual_high: float, prev_mid: float) -> None:
+    subprocess.run(
+        [
+            BACKEND_PYTHON, RUN_TRADE, seed_path,
+            "-o", output_csv,
+            "--actual-low",  str(actual_low),
+            "--actual-high", str(actual_high),
+            "--prev-mid",    str(prev_mid),
+        ],
+        check=True,
+    )
+
+
+def step_calc_metrics(output_csv: str) -> str:
+    result = subprocess.run(
+        [BACKEND_PYTHON, CALC_METRICS, output_csv],
+        check=True, capture_output=True, text=True,
+    )
+    return result.stdout
+
+
+def _parse_stdout_metric(stdout: str, key: str) -> str:
+    match = re.search(rf"^{key}=(.+)$", stdout, re.MULTILINE)
+    return match.group(1).strip() if match else "NA"
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(description="MiroFish Realtime Pipeline")
+    parser.add_argument("--latest-time", default=None,
+                        help="Latest candle time YYYY-MM-DD-HH-MM (default: auto)")
+    parser.add_argument("--interval", default="1h",
+                        help="Candle interval e.g. 1h, 30m (default: 1h)")
+    parser.add_argument("--limit", type=int, default=4,
+                        help="Number of seed candles (default: 4, min: 2)")
+    args = parser.parse_args()
+
+    if args.limit < 2:
+        print("Error: --limit must be >= 2")
+        sys.exit(1)
+
+    pipeline_start = time.time()
+    now_time       = datetime.now(timezone.utc)
+    interval_secs  = interval_to_seconds(args.interval)
+
+    if args.latest_time:
+        latest_time = datetime.strptime(args.latest_time, "%Y-%m-%d-%H-%M").replace(tzinfo=timezone.utc)
+    else:
+        latest_time = compute_latest_time(args.interval, now=now_time)
+
+    out_dir    = os.path.join(project_root, "research", "predictions")
+    os.makedirs(out_dir, exist_ok=True)
+    output_csv = os.path.join(out_dir, f"{dt_to_filename(now_time)}.csv")
+
+    print(f"MiroFish Pipeline | latest_time={dt_to_filename(latest_time)} | interval={args.interval} | limit={args.limit}")
+    print("=" * 60)
+
+    print("[1/5] Fetching OHLCV...")
+    all_candles = step_fetch_ohlcv(args.interval, args.limit)
+    seed_candles, actual_candle, prev_mid = split_candles(all_candles, args.limit)
+    ohlcv_path = step_write_ohlcv(seed_candles, latest_time, args.interval)
+    print(f"  → {ohlcv_path} ({len(seed_candles)} candles)")
+    print(f"  actual: low={actual_candle['low']} high={actual_candle['high']}")
+    print(f"  prev_mid={prev_mid:.2f}")
+
+    print("[2/5] Fetching tweets...")
+    tweets_path = step_fetch_tweets(latest_time, args.limit, interval_secs)
+    print(f"  → {tweets_path}")
+
+    print("[3/5] Generating seed...")
+    seed_path = step_gen_seed(seed_candles, tweets_path, latest_time)
+    print(f"  → {seed_path}")
+
+    print("[4/5] Running simulation...")
+    step_run_trade(seed_path, output_csv,
+                   actual_candle["low"], actual_candle["high"], prev_mid)
+
+    print("[5/5] Calculating metrics...")
+    metrics_stdout = step_calc_metrics(output_csv)
+    print(metrics_stdout.strip())
+
+    total_runtime_mins = (time.time() - pipeline_start) / 60.0
+    mae = _parse_stdout_metric(metrics_stdout, "MAE")
+    mda = _parse_stdout_metric(metrics_stdout, "MDA")
+    insert_summary_before_b_lines(output_csv, total_runtime_mins, mae, mda)
+    prepend_config(output_csv, latest_time, args.interval, args.limit)
+
+    print()
+    print("=" * 60)
+    print(f"Output: {output_csv}")
+    print(f"Total runtime: {total_runtime_mins:.1f} mins")
+
+
+if __name__ == "__main__":
+    main()
