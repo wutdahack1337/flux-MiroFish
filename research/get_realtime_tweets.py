@@ -47,11 +47,21 @@ def clean_text(text: str) -> str:
     return text
 
 
+def parse_created_at(raw: str) -> str:
+    """Convert Twitter createdAt 'Wed Apr 08 10:18:04 +0000 2026' → '2026-04-08T10:00'."""
+    try:
+        dt = datetime.strptime(raw, "%a %b %d %H:%M:%S +0000 %Y").replace(tzinfo=timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M")
+    except (ValueError, TypeError):
+        return ""
+
+
 def extract(tweet: dict) -> dict:
     return {
         "userName":  tweet.get("author", {}).get("userName", ""),
         "text":      clean_text(tweet.get("text", "")),
         "likeCount": tweet.get("likeCount", 0),
+        "createdAt": parse_created_at(tweet.get("createdAt", "")),
     }
 
 
