@@ -24,9 +24,9 @@ DEFAULT_ACCOUNTS = ["TedPillows", "CoinDesk", "Cointelegraph", "WatcherGuru"]
 DEFAULT_QUERY    = "BTC OR Bitcoin OR #BTC OR #Bitcoin"
 
 
-def build_query(accounts: list[str], query: str, since_time: int, until_time: int) -> str:
+def build_query(accounts: list[str], query: str, until_time: int) -> str:
     from_clause = " OR ".join(f"from:{a}" for a in accounts)
-    return f"({query}) ({from_clause}) since_time:{since_time} until_time:{until_time}"
+    return f"({query}) ({from_clause}) until_time:{until_time}"
 
 
 def fetch_tweets(full_query: str) -> list[dict]:
@@ -80,10 +80,9 @@ def main():
     else:
         raise ValueError(f"Unknown interval: {interval}")
 
-    since_time = int((latest_time - timedelta(seconds=(args.limit - 1) * interval_secs)).timestamp())
     until_time = int((latest_time + timedelta(seconds=interval_secs)).timestamp())
 
-    full_query = build_query(args.accounts, args.query, since_time, until_time)
+    full_query = build_query(args.accounts, args.query, until_time)
     tweets_raw = fetch_tweets(full_query)
     tweets     = [extract(t) for t in tweets_raw]
 
@@ -95,7 +94,7 @@ def main():
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(tweets, f, ensure_ascii=False, indent=2)
 
-    print(f"Wrote {len(tweets)} tweets (window: {since_time}→{until_time}) → {out_path}")
+    print(f"Wrote {len(tweets)} tweets (until: {until_time}) → {out_path}")
 
 
 if __name__ == "__main__":

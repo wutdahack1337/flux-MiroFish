@@ -57,15 +57,9 @@ def dt_to_filename(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d-%H-%M")
 
 
-def tweet_time_window(latest_time: datetime, limit: int, interval_secs: int):
-    """Return (since_time, until_time) as Unix seconds for the tweet query window.
-
-    since = latest_time - (limit-1) * interval  (start of oldest seed candle)
-    until = latest_time + interval               (end of latest seed candle)
-    """
-    since = int((latest_time - timedelta(seconds=(limit - 1) * interval_secs)).timestamp())
-    until = int((latest_time + timedelta(seconds=interval_secs)).timestamp())
-    return since, until
+def tweet_time_window(latest_time: datetime, interval_secs: int) -> int:
+    """Return until_time as Unix seconds: end of the latest seed candle."""
+    return int((latest_time + timedelta(seconds=interval_secs)).timestamp())
 
 
 def split_candles(candles: list, limit: int):
@@ -126,9 +120,9 @@ def step_write_ohlcv(seed_candles: list, latest_time: datetime, interval: str) -
     return out_path
 
 
-def step_fetch_tweets(latest_time: datetime, limit: int, interval_secs: int) -> str:
-    since, until = tweet_time_window(latest_time, limit, interval_secs)
-    full_query   = build_query(DEFAULT_ACCOUNTS, DEFAULT_QUERY, since, until)
+def step_fetch_tweets(latest_time: datetime, interval_secs: int) -> str:
+    until      = tweet_time_window(latest_time, interval_secs)
+    full_query = build_query(DEFAULT_ACCOUNTS, DEFAULT_QUERY, until)
     tweets_raw   = fetch_tweets(full_query)
     tweets       = [extract_tweet(t) for t in tweets_raw]
 
@@ -232,7 +226,7 @@ def main():
     print(f"  prev_mid={prev_mid:.2f}")
 
     print("[2/5] Fetching tweets...")
-    tweets_path = step_fetch_tweets(latest_time, args.limit, interval_secs)
+    tweets_path = step_fetch_tweets(latest_time, interval_secs)
     print(f"  → {tweets_path}")
 
     print("[3/5] Generating seed...")

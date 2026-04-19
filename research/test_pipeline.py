@@ -48,15 +48,14 @@ def test_dt_to_filename():
 
 def test_build_query():
     from get_realtime_tweets import build_query
-    result = build_query(["Alice", "Bob"], "BTC OR Bitcoin", 1000, 2000)
-    assert result == "(BTC OR Bitcoin) (from:Alice OR from:Bob) since_time:1000 until_time:2000"
+    result = build_query(["Alice", "Bob"], "BTC OR Bitcoin", 2000)
+    assert result == "(BTC OR Bitcoin) (from:Alice OR from:Bob) until_time:2000"
 
 def test_tweet_time_window():
     from pipeline import tweet_time_window
-    # latest=04:00, limit=4, interval=1h → since=01:00, until=05:00
+    # latest=04:00, interval=1h → until=05:00
     latest = datetime(2026, 4, 19, 4, 0, 0, tzinfo=timezone.utc)
-    since, until = tweet_time_window(latest, limit=4, interval_secs=3600)
-    assert since == int(datetime(2026, 4, 19, 1, 0, 0, tzinfo=timezone.utc).timestamp())
+    until = tweet_time_window(latest, interval_secs=3600)
     assert until == int(datetime(2026, 4, 19, 5, 0, 0, tzinfo=timezone.utc).timestamp())
 
 
