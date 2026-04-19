@@ -39,7 +39,9 @@ def fetch_tweets(full_query: str) -> list[dict]:
 
 def clean_text(text: str) -> str:
     text = re.sub(r'https?://\S+', '', text)
-    text = re.sub(r'[\U0001F300-\U0001F9FF]', '', text)
+    text = re.sub(r'[\U0001F000-\U0001FFFF]', '', text)  # all emoji/symbols blocks
+    text = re.sub(r'[\u2600-\u27BF]', '', text)           # misc symbols, dingbats
+    text = re.sub(r'\uFE0F', '', text)                     # variation selectors
     text = re.sub(r'@[\w]+', '', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
