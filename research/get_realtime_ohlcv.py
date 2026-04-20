@@ -13,10 +13,13 @@ import os
 from datetime import datetime, timezone
 
 import requests
+from dotenv import load_dotenv
 
 from common import project_root
 
-BASE_URL = "https://api.binance.com/api/v3/klines"
+load_dotenv()
+
+BASE_URL = os.getenv("BINANCE_BASE_URL", "https://api.binance.com/api/v3/klines")
 
 
 def fetch_klines(symbol: str, interval: str, limit: int) -> list:

@@ -1,9 +1,10 @@
 """
 get_realtime_tweets — Fetch top tweets for a query via twitterapi.io
 Writes output to tweets/YYYY-MM-DD-HH-MM.json under research/.
+Interval configured via env INTERVAL (default: 1h).
 
 Usage:
-    python3 research/get_realtime_tweets.py --latest-time 2026-04-19-04-00 --limit 4
+    python3 research/get_realtime_tweets.py --latest-time 2026-04-19-04-00
     python3 research/get_realtime_tweets.py  # uses defaults
 """
 
@@ -14,14 +15,17 @@ import re
 from datetime import datetime, timedelta, timezone
 
 import requests
+from dotenv import load_dotenv
 
 from common import project_root
 
-API_KEY  = "new1_d70f06a445f84c62ae8e73899eeff94e"
-BASE_URL = "https://api.twitterapi.io/twitter/tweet/advanced_search"
+load_dotenv()
 
-DEFAULT_ACCOUNTS = ["TedPillows", "CoinDesk", "Cointelegraph", "WatcherGuru"]
-DEFAULT_QUERY    = "BTC OR Bitcoin OR #BTC OR #Bitcoin"
+API_KEY  = os.getenv("TWEET_API_KEY", "")
+BASE_URL = os.getenv("TWEET_BASE_URL", "https://api.twitterapi.io/twitter/tweet/advanced_search")
+
+ACCOUNTS = [a.strip() for a in os.getenv("ACCOUNTS", "").split(",") if a.strip()]
+QUERY    = os.getenv("QUERY", "")
 
 
 def build_query(accounts: list[str], query: str, until_time: int) -> str:
@@ -31,7 +35,7 @@ def build_query(accounts: list[str], query: str, until_time: int) -> str:
 
 def fetch_tweets(full_query: str) -> list[dict]:
     headers = {"X-API-Key": API_KEY}
-    params  = {"queryType": "Top", "query": full_query}
+    params  = {"queryType": "Latest", "query": full_query}
     response = requests.get(BASE_URL, headers=headers, params=params, timeout=30)
     response.raise_for_status()
     return response.json().get("tweets", [])
@@ -69,14 +73,6 @@ def main():
     parser = argparse.ArgumentParser(description="Fetch top tweets for a time window")
     parser.add_argument("--latest-time", default=None,
                         help="Latest candle time YYYY-MM-DD-HH-MM (default: now)")
-    parser.add_argument("--interval", default="1h",
-                        help="Candle interval e.g. 1h, 30m (default: 1h)")
-    parser.add_argument("--limit", type=int, default=4,
-                        help="Number of candles (sets tweet window size, default: 4)")
-    parser.add_argument("--query", default=DEFAULT_QUERY,
-                        help="Base search query")
-    parser.add_argument("--accounts", nargs="*", default=DEFAULT_ACCOUNTS,
-                        help="Twitter accounts to filter from")
     args = parser.parse_args()
 
     if args.latest_time:
@@ -84,7 +80,7 @@ def main():
     else:
         latest_time = datetime.now(timezone.utc)
 
-    interval = args.interval
+    interval = os.getenv("INTERVAL", "1h")
     if interval.endswith("h"):
         interval_secs = int(interval[:-1]) * 3600
     elif interval.endswith("m"):
@@ -94,7 +90,7 @@ def main():
 
     until_time = int((latest_time + timedelta(seconds=interval_secs)).timestamp())
 
-    full_query = build_query(args.accounts, args.query, until_time)
+    full_query = build_query(ACCOUNTS, QUERY, until_time)
     tweets_raw = fetch_tweets(full_query)
     tweets     = [extract(t) for t in tweets_raw]
 

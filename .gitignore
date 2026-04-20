@@ -6,6 +6,9 @@ test*.py
 docs/
 plot/
 seeds/
+ohlcv/
+tweets/
+predictions/
 # Seed graph-id cache
 **/.cache/
 

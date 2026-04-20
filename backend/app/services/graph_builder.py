@@ -454,7 +454,7 @@ class GraphBuilderService:
                 )
             
             if pending_episodes:
-                time.sleep(2.5) # Check every 2.5 seconds
+                time.sleep(1.5) # Check every 1.5 seconds
         
         if progress_callback:
             progress_callback(f"Processing complete: {completed_count}/{total_episodes}", 1.0)

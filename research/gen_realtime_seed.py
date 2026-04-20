@@ -11,7 +11,11 @@ import json
 import os
 from datetime import datetime, timezone
 
+from dotenv import load_dotenv
+
 from common import project_root
+
+load_dotenv()
 
 
 def load_json(path: str):
@@ -50,10 +54,11 @@ def format_ohlcv(candles: list[dict]) -> str:
 
 
 def format_tweets(tweets: list[dict]) -> str:
-    sorted_tweets = sorted(tweets, key=lambda t: t.get("createdAt", ""), reverse=True)[:5]
+    tweet_limit = int(os.getenv("TWEET_LIMIT", "5"))
+    sorted_tweets = sorted(tweets, key=lambda t: t.get("createdAt", ""), reverse=True)[:tweet_limit]
     sorted_tweets = sorted(sorted_tweets, key=lambda t: t.get("createdAt", ""))
     items = [
-        {"userName": t["userName"], "tweet": t["text"], "createdAt": t.get("createdAt", "")}
+        {"userName": t["userName"], "tweet": t["text"], "createdAt": t.get("createdAt", "").replace("T", " ")}
         for t in sorted_tweets
     ]
     return "# X Tweets\n" + json.dumps(items, ensure_ascii=False, indent=2)

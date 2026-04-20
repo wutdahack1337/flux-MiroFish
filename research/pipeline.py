@@ -4,7 +4,7 @@ MiroFish Realtime Pipeline
 Fetches OHLCV + tweets → seed → simulation → metrics → predictions CSV.
 
 Usage:
-    python3 research/pipeline.py [--latest-time YYYY-MM-DD-HH-MM] [--interval 1h|30m] [--limit N]
+    python3 research/pipeline.py [--latest-time YYYY-MM-DD-HH-MM]
 """
 
 import argparse
@@ -16,11 +16,15 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
+from dotenv import load_dotenv
+
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
 from get_realtime_ohlcv import fetch_klines, extract as extract_candle
-from get_realtime_tweets import fetch_tweets, build_query, DEFAULT_ACCOUNTS, DEFAULT_QUERY
+from get_realtime_tweets import fetch_tweets, build_query, ACCOUNTS, QUERY
 from get_realtime_tweets import extract as extract_tweet
 from gen_realtime_seed import format_ohlcv, format_tweets, load_agents
 
@@ -127,7 +131,7 @@ def step_write_ohlcv(seed_candles: list, latest_time: datetime, interval: str) -
 
 def step_fetch_tweets(latest_time: datetime, interval_secs: int) -> str:
     until      = tweet_time_window(latest_time, interval_secs)
-    full_query = build_query(DEFAULT_ACCOUNTS, DEFAULT_QUERY, until)
+    full_query = build_query(ACCOUNTS, QUERY, until)
     tweets_raw   = fetch_tweets(full_query)
     tweets       = [extract_tweet(t) for t in tweets_raw]
 
@@ -196,36 +200,35 @@ def main():
     parser = argparse.ArgumentParser(description="MiroFish Realtime Pipeline")
     parser.add_argument("--latest-time", default=None,
                         help="Latest candle time YYYY-MM-DD-HH-MM (default: auto)")
-    parser.add_argument("--interval", default="1h",
-                        help="Candle interval e.g. 1h, 30m (default: 1h)")
-    parser.add_argument("--limit", type=int, default=4,
-                        help="Number of seed candles (default: 4, min: 2)")
     args = parser.parse_args()
 
-    if args.limit < 2:
-        print("Error: --limit must be >= 2")
+    interval = os.getenv("INTERVAL", "1h")
+    limit    = int(os.getenv("LIMIT", "4"))
+
+    if limit < 2:
+        print("Error: LIMIT must be >= 2")
         sys.exit(1)
 
     pipeline_start = time.time()
     now_time       = datetime.now(timezone.utc)
-    interval_secs  = interval_to_seconds(args.interval)
+    interval_secs  = interval_to_seconds(interval)
 
     if args.latest_time:
         latest_time = datetime.strptime(args.latest_time, "%Y-%m-%d-%H-%M").replace(tzinfo=timezone.utc)
     else:
-        latest_time = compute_latest_time(args.interval, now=now_time)
+        latest_time = compute_latest_time(interval, now=now_time)
 
     out_dir    = os.path.join(project_root, "research", "predictions")
     os.makedirs(out_dir, exist_ok=True)
     output_csv = os.path.join(out_dir, f"{dt_to_filename(now_time)}.csv")
 
-    print(f"MiroFish Pipeline | latest_time={dt_to_filename(latest_time)} | interval={args.interval} | limit={args.limit}")
+    print(f"MiroFish Pipeline | latest_time={dt_to_filename(latest_time)} | interval={interval} | limit={limit}")
     print("=" * 60)
 
     print("[1/5] Fetching OHLCV...")
-    all_candles = step_fetch_ohlcv(args.interval, args.limit, latest_time)
-    seed_candles, actual_candle, prev_mid = split_candles(all_candles, args.limit)
-    ohlcv_path = step_write_ohlcv(seed_candles, latest_time, args.interval)
+    all_candles = step_fetch_ohlcv(interval, limit, latest_time)
+    seed_candles, actual_candle, prev_mid = split_candles(all_candles, limit)
+    ohlcv_path = step_write_ohlcv(seed_candles, latest_time, interval)
     print(f"  → {ohlcv_path} ({len(seed_candles)} candles)")
     print(f"  actual: low={actual_candle['low']} high={actual_candle['high']}")
     print(f"  prev_mid={prev_mid:.2f}")
@@ -255,7 +258,7 @@ def main():
     mae = _parse_stdout_metric(metrics_stdout, "MAE")
     mda = _parse_stdout_metric(metrics_stdout, "MDA")
     insert_summary_before_b_lines(output_csv, total_runtime_mins, mae, mda)
-    prepend_config(output_csv, latest_time, args.interval, args.limit)
+    prepend_config(output_csv, latest_time, interval, limit)
 
     print()
     print("=" * 60)
