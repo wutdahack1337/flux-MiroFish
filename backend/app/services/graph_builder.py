@@ -266,7 +266,13 @@ class GraphBuilderService:
         
         # Zep reserved names cannot be used as attribute names
         RESERVED_NAMES = {'uuid', 'name', 'group_id', 'name_embedding', 'summary', 'created_at'}
-        
+
+        def to_pascal_case(s: str) -> str:
+            """Convert any casing (snake_case, camelCase, space-separated) to PascalCase."""
+            import re as _re
+            parts = _re.split(r'[\s_\-]+', s)
+            return ''.join(p[0].upper() + p[1:] if p else '' for p in parts if p)
+
         def safe_attr_name(attr_name: str) -> str:
             """Convert reserved names to safe attribute names"""
             if attr_name.lower() in RESERVED_NAMES:
@@ -276,7 +282,7 @@ class GraphBuilderService:
         # Dynamically create entity types
         entity_types = {}
         for entity_def in ontology.get("entity_types", []):
-            name = entity_def["name"]
+            name = to_pascal_case(entity_def["name"])
             description = entity_def.get("description", f"A {name} entity.")
             
             # Create attributes dict and type annotations (required by Pydantic v2)
@@ -300,7 +306,7 @@ class GraphBuilderService:
         # Dynamically create edge types
         edge_definitions = {}
         for edge_def in ontology.get("edge_types", []):
-            name = edge_def["name"]
+            name = to_pascal_case(edge_def["name"])
             description = edge_def.get("description", f"A {name} relationship.")
             
             # Create attributes dict and type annotations
@@ -316,9 +322,7 @@ class GraphBuilderService:
             
             attrs["__annotations__"] = annotations
             
-            # Dynamically create class
-            class_name = ''.join(word.capitalize() for word in name.split('_'))
-            edge_class = type(class_name, (EdgeModel,), attrs)
+            edge_class = type(name, (EdgeModel,), attrs)
             edge_class.__doc__ = description
             
             # Build source_targets
@@ -326,8 +330,8 @@ class GraphBuilderService:
             for st in edge_def.get("source_targets", []):
                 source_targets.append(
                     EntityEdgeSourceTarget(
-                        source=st.get("source", "Entity"),
-                        target=st.get("target", "Entity")
+                        source=to_pascal_case(st.get("source", "Entity")),
+                        target=to_pascal_case(st.get("target", "Entity"))
                     )
                 )
             

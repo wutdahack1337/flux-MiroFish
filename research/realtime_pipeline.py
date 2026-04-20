@@ -226,7 +226,7 @@ def main():
     else:
         latest_time = compute_latest_time(interval, now=now_time)
 
-    out_dir    = os.path.join(project_root, "research", "predictions")
+    out_dir    = os.path.join(project_root, "research", "predictions", now_time.strftime("%Y-%m-%d"))
     os.makedirs(out_dir, exist_ok=True)
     output_csv = os.path.join(out_dir, f"{dt_to_filename(now_time)}.csv")
 

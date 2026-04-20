@@ -1,3 +1,5 @@
+Your code will be review by Codex
+
 ## Run commands
 - requirements: marketdata/2026-04-05/ohlcv.csv, news/2026-04-05T01.md
 - tweets: python3 backend/scripts/get_tweets.py --query bitcoin

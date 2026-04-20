@@ -63,8 +63,21 @@ def _save_graph_cache(sidecar_path: str, sha256: str, project_id: str, graph_id:
         "cached_at": datetime.now().isoformat(timespec="seconds"),
     }
     try:
-        with open(sidecar_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        with open(sidecar_path, "a+", encoding="utf-8") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.seek(0)
+                existing = f.read()
+                if existing:
+                    try:
+                        data = {**json.loads(existing), **data}
+                    except json.JSONDecodeError:
+                        pass
+                f.seek(0)
+                f.truncate()
+                json.dump(data, f, indent=2)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     except OSError:
         pass  # cache write failure is non-fatal
 
@@ -166,8 +179,10 @@ def check_server(base_url, session=None):
     """Check if Flask server is reachable."""
     http = session or requests
     try:
-        http.get(f"{base_url}/api/graph/tasks", timeout=5)
+        http.get(f"{base_url}/api/graph/tasks", timeout=10)
         return True
+    except requests.exceptions.ReadTimeout:
+        return True  # Server is alive but busy under parallel load
     except requests.ConnectionError:
         return False
 
@@ -413,7 +428,7 @@ def _interview_agents(base_url, simulation_id, seed_text, predict_hours, id_to_p
         "Format: range_low,range_high"
     )
 
-    interview_timeout = max(60, agent_count * 15)
+    interview_timeout = max(30, agent_count * 8)
     interview_result = api("post", base_url, "/api/simulation/interview/all",
                            session=session, json={
                                "simulation_id": simulation_id,
@@ -464,7 +479,7 @@ def _fallback_persona_decisions(llm, seed_text, id_to_profile, predict_hours):
         tasks.append((idx, agent_name, persona))
 
     forecasts = []
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers=agent_count) as pool:
         futures = {
             pool.submit(_forecast_from_persona, llm, name, persona, world_seed, predict_hours): (idx, name)
             for idx, name, persona in tasks
@@ -504,13 +519,13 @@ def step5_interview_for_trades(base_url, simulation_id, llm, seed_text, predict_
         # The monitor thread sets runner_status="completed" from action logs *before* the
         # simulation process calls ipc_handler.update_status("alive"), creating a race window.
         env_status_alive = False
-        for _ in range(60):  # up to 60 seconds
+        for _ in range(60):  # up to 30 seconds (0.5s interval)
             env_check = api("post", base_url, "/api/simulation/env-status",
                             session=session, json={"simulation_id": simulation_id})
             if env_check.get("env_alive"):
                 env_status_alive = True
                 break
-            time.sleep(1)
+            time.sleep(0.5)
         if not env_status_alive:
             print(f"  Environment not ready for interview (timed out waiting for alive status)")
         else:

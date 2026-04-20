@@ -490,8 +490,11 @@ class ParallelIPCHandler:
 
         results = {}
 
-        # 处理Twitter平台的采访
-        if twitter_interviews and self.twitter_env:
+        async def _run_twitter():
+            if not (twitter_interviews and self.twitter_env):
+                if twitter_interviews:
+                    print(f"  Warning: {len(twitter_interviews)} Twitter interviews requested but Twitter environment is not available")
+                return {}
             try:
                 print(f"  [Debug] Processing {len(twitter_interviews)} Twitter interviews")
                 twitter_actions = {}
@@ -507,27 +510,32 @@ class ParallelIPCHandler:
                     except Exception as e:
                         print(f"  Warning: could not get Twitter Agent {agent_id}: {e}")
 
-                if twitter_actions:
-                    print(f"  [Debug] Sending {len(twitter_actions)} Twitter actions to environment")
-                    await self.twitter_env.step(twitter_actions)
-                    print(f"  [Debug] Twitter step completed, retrieving results")
-
-                    for interview in twitter_interviews:
-                        agent_id = interview.get("agent_id")
-                        result = self._get_interview_result(agent_id, "twitter")
-                        result["platform"] = "twitter"
-                        results[f"twitter_{agent_id}"] = result
-                        print(f"  [Debug] Twitter Agent {agent_id} result: {result}")
-                else:
+                if not twitter_actions:
                     print(f"  [Debug] No valid Twitter agents found for interviews")
+                    return {}
+
+                print(f"  [Debug] Sending {len(twitter_actions)} Twitter actions to environment")
+                await self.twitter_env.step(twitter_actions)
+                print(f"  [Debug] Twitter step completed, retrieving results")
+
+                platform_results = {}
+                for interview in twitter_interviews:
+                    agent_id = interview.get("agent_id")
+                    result = self._get_interview_result(agent_id, "twitter")
+                    result["platform"] = "twitter"
+                    platform_results[f"twitter_{agent_id}"] = result
+                    print(f"  [Debug] Twitter Agent {agent_id} result: {result}")
+                return platform_results
             except Exception as e:
                 print(f"  Twitter batch interview failed: {e}")
                 traceback.print_exc()
-        elif twitter_interviews and not self.twitter_env:
-            print(f"  Warning: {len(twitter_interviews)} Twitter interviews requested but Twitter environment is not available")
+                return {}
 
-        # 处理Reddit平台的采访
-        if reddit_interviews and self.reddit_env:
+        async def _run_reddit():
+            if not (reddit_interviews and self.reddit_env):
+                if reddit_interviews:
+                    print(f"  Warning: {len(reddit_interviews)} Reddit interviews requested but Reddit environment is not available")
+                return {}
             try:
                 print(f"  [Debug] Processing {len(reddit_interviews)} Reddit interviews")
                 reddit_actions = {}
@@ -543,24 +551,30 @@ class ParallelIPCHandler:
                     except Exception as e:
                         print(f"  Warning: could not get Reddit Agent {agent_id}: {e}")
 
-                if reddit_actions:
-                    print(f"  [Debug] Sending {len(reddit_actions)} Reddit actions to environment")
-                    await self.reddit_env.step(reddit_actions)
-                    print(f"  [Debug] Reddit step completed, retrieving results")
-
-                    for interview in reddit_interviews:
-                        agent_id = interview.get("agent_id")
-                        result = self._get_interview_result(agent_id, "reddit")
-                        result["platform"] = "reddit"
-                        results[f"reddit_{agent_id}"] = result
-                        print(f"  [Debug] Reddit Agent {agent_id} result: {result}")
-                else:
+                if not reddit_actions:
                     print(f"  [Debug] No valid Reddit agents found for interviews")
+                    return {}
+
+                print(f"  [Debug] Sending {len(reddit_actions)} Reddit actions to environment")
+                await self.reddit_env.step(reddit_actions)
+                print(f"  [Debug] Reddit step completed, retrieving results")
+
+                platform_results = {}
+                for interview in reddit_interviews:
+                    agent_id = interview.get("agent_id")
+                    result = self._get_interview_result(agent_id, "reddit")
+                    result["platform"] = "reddit"
+                    platform_results[f"reddit_{agent_id}"] = result
+                    print(f"  [Debug] Reddit Agent {agent_id} result: {result}")
+                return platform_results
             except Exception as e:
                 print(f"  Reddit batch interview failed: {e}")
                 traceback.print_exc()
-        elif reddit_interviews and not self.reddit_env:
-            print(f"  Warning: {len(reddit_interviews)} Reddit interviews requested but Reddit environment is not available")
+                return {}
+
+        twitter_results, reddit_results = await asyncio.gather(_run_twitter(), _run_reddit())
+        results.update(twitter_results)
+        results.update(reddit_results)
 
         if results:
             self.send_response(command_id, "completed", result={
