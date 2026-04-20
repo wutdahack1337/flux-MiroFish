@@ -41,7 +41,7 @@ def load_agents(agents_path: str | None = None) -> list[dict]:
     if agents_path and os.path.exists(agents_path):
         with open(agents_path, encoding="utf-8") as f:
             return json.load(f)
-    default = os.path.join(project_root, "research", "agents.txt")
+    default = os.path.join(project_root, "research", "agents.json")
     if os.path.exists(default):
         with open(default, encoding="utf-8") as f:
             return json.load(f)

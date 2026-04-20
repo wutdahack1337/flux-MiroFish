@@ -26,7 +26,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 from get_realtime_ohlcv import fetch_klines, extract as extract_candle
 from get_realtime_tweets import fetch_tweets, build_query, ACCOUNTS, QUERY
 from get_realtime_tweets import extract as extract_tweet
-from gen_realtime_seed import format_ohlcv, format_tweets, format_agents, load_agents
+from ..gen_seed import format_ohlcv, format_tweets, format_agents, load_agents
 
 BACKEND_PYTHON = os.path.join(project_root, "backend", ".venv", "bin", "python3")
 RUN_TRADE      = os.path.join(project_root, "backend", "scripts", "run_trade.py")
@@ -150,7 +150,7 @@ def step_gen_seed(seed_candles: list, tweets_path: str, latest_time: datetime,
 
     chart_time   = latest_time.strftime("%Y-%m-%d %H:%M")
     latest_price = seed_candles[-1]["close"]
-    agents       = load_agents(os.path.join(project_root, "research", "agents.txt"))
+    agents       = load_agents(os.path.join(project_root, "research", "agents.json"))
 
     tweet_limit  = int(os.getenv("TWEET_LIMIT", "5"))
     actual_tweets = min(tweet_limit, len(tweets))
