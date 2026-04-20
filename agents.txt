@@ -1,4 +1,0 @@
-- quant1: Analytical, data-driven, emotionally detached. Trusts numbers over intuition.
-- whale1: Methodical and private. Moves quietly, thinks in large time horizons.
-- retail1: Easily influenced, reactive to price moves and social feeds.
-- kol1 (KOL, 2.1M followers): Hype-driven, high-energy, large retail audience. Posts frequently and amplifies momentum.

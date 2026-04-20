@@ -1,0 +1,26 @@
+[
+  {
+    "name": "quant1",
+    "description": "Analytical, data-driven, emotionally detached. Trusts numbers over intuition."
+  },
+  {
+    "name": "whale1",
+    "description": "Methodical and private. Moves quietly, thinks in large time horizons."
+  },
+  {
+    "name": "retail1",
+    "description": "Easily influenced, reactive to price moves and social feeds."
+  },
+  {
+    "name": "kol1",
+    "description": "KOL (2.1M followers). Hype-driven, high-energy, large retail audience. Posts frequently and amplifies momentum."
+  },
+  {
+    "name": "holder1",
+    "description": "Patient and conviction-driven. Tunes out short-term noise."
+  },
+  {
+    "name": "news1",
+    "description": "Macro-aware and well-read. Connects headline dots faster than most."
+  }
+]

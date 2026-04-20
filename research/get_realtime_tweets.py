@@ -94,7 +94,7 @@ def main():
     tweets_raw = fetch_tweets(full_query)
     tweets     = [extract(t) for t in tweets_raw]
 
-    out_dir  = os.path.join(project_root, "research", "tweets")
+    out_dir  = os.path.join(project_root, "research", "data", "tweets")
     os.makedirs(out_dir, exist_ok=True)
     filename = latest_time.strftime("%Y-%m-%d-%H-%M") + ".json"
     out_path = os.path.join(out_dir, filename)

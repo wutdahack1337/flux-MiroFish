@@ -52,7 +52,7 @@ def main():
     candles = fetch_klines(args.symbol, args.interval, args.limit)
     extracted = [extract(c) for c in candles]
 
-    out_dir = os.path.join(project_root, "ohlcv")
+    out_dir = os.path.join(project_root, "research", "data", "ohlcv")
     os.makedirs(out_dir, exist_ok=True)
 
     # Use the latest candle's timestamp for the filename

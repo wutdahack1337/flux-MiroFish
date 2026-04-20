@@ -26,7 +26,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 from get_realtime_ohlcv import fetch_klines, extract as extract_candle
 from get_realtime_tweets import fetch_tweets, build_query, ACCOUNTS, QUERY
 from get_realtime_tweets import extract as extract_tweet
-from gen_realtime_seed import format_ohlcv, format_tweets, load_agents
+from gen_realtime_seed import format_ohlcv, format_tweets, format_agents, load_agents
 
 BACKEND_PYTHON = os.path.join(project_root, "backend", ".venv", "bin", "python3")
 RUN_TRADE      = os.path.join(project_root, "backend", "scripts", "run_trade.py")
@@ -121,7 +121,7 @@ def step_fetch_ohlcv(interval: str, limit: int, latest_time: datetime) -> list:
 
 
 def step_write_ohlcv(seed_candles: list, latest_time: datetime, interval: str) -> str:
-    out_dir  = os.path.join(project_root, "research", "ohlcv")
+    out_dir  = os.path.join(project_root, "research", "data", "ohlcv")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"{dt_to_filename(latest_time)}-{interval}.json")
     with open(out_path, "w", encoding="utf-8") as f:
@@ -135,7 +135,7 @@ def step_fetch_tweets(latest_time: datetime, interval_secs: int) -> str:
     tweets_raw   = fetch_tweets(full_query)
     tweets       = [extract_tweet(t) for t in tweets_raw]
 
-    out_dir  = os.path.join(project_root, "research", "tweets")
+    out_dir  = os.path.join(project_root, "research", "data", "tweets")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"{dt_to_filename(latest_time)}.json")
     with open(out_path, "w", encoding="utf-8") as f:
@@ -143,32 +143,38 @@ def step_fetch_tweets(latest_time: datetime, interval_secs: int) -> str:
     return out_path
 
 
-def step_gen_seed(seed_candles: list, tweets_path: str, latest_time: datetime) -> str:
+def step_gen_seed(seed_candles: list, tweets_path: str, latest_time: datetime,
+                  interval: str, limit: int) -> str:
     with open(tweets_path, encoding="utf-8") as f:
         tweets = json.load(f)
 
     chart_time   = latest_time.strftime("%Y-%m-%d %H:%M")
     latest_price = seed_candles[-1]["close"]
-    agents_text  = load_agents(os.path.join(project_root, "agents.txt"))
+    agents       = load_agents(os.path.join(project_root, "research", "agents.txt"))
+
+    tweet_limit  = int(os.getenv("TWEET_LIMIT", "5"))
+    actual_tweets = min(tweet_limit, len(tweets))
+    agent_count  = len(agents)
 
     content = "\n\n".join([
         f"# Latest Chart Time\n{chart_time}",
         f"# Latest BTC Price\n{latest_price}",
         format_ohlcv(seed_candles),
         format_tweets(tweets),
-        "# Agents Population\n" + agents_text,
+        format_agents(agents),
     ]) + "\n"
 
     out_dir  = os.path.join(project_root, "research", "seeds")
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"{dt_to_filename(latest_time)}.md")
+    filename = f"{dt_to_filename(latest_time)}-{interval}-{limit}-{actual_tweets}-{agent_count}.md"
+    out_path = os.path.join(out_dir, filename)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(content)
     return out_path
 
 
 def step_run_trade(seed_path: str, output_csv: str,
-                   actual_low: float, actual_high: float, prev_mid: float) -> None:
+                   actual_low: float, actual_high: float, prev_mid: float, rounds: int) -> None:
     subprocess.run(
         [
             BACKEND_PYTHON, RUN_TRADE, seed_path,
@@ -176,6 +182,7 @@ def step_run_trade(seed_path: str, output_csv: str,
             "--actual-low",  str(actual_low),
             "--actual-high", str(actual_high),
             "--prev-mid",    str(prev_mid),
+            "--rounds",      str(rounds),
         ],
         check=True,
     )
@@ -204,6 +211,7 @@ def main():
 
     interval = os.getenv("INTERVAL", "1h")
     limit    = int(os.getenv("LIMIT", "4"))
+    rounds   = int(os.getenv("ROUNDS", "5"))
 
     if limit < 2:
         print("Error: LIMIT must be >= 2")
@@ -222,7 +230,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     output_csv = os.path.join(out_dir, f"{dt_to_filename(now_time)}.csv")
 
-    print(f"MiroFish Pipeline | latest_time={dt_to_filename(latest_time)} | interval={interval} | limit={limit}")
+    print(f"MiroFish Pipeline | latest_time={dt_to_filename(latest_time)} | interval={interval} | limit={limit} | rounds={rounds}")
     print("=" * 60)
 
     print("[1/5] Fetching OHLCV...")
@@ -233,7 +241,7 @@ def main():
     print(f"  actual: low={actual_candle['low']} high={actual_candle['high']}")
     print(f"  prev_mid={prev_mid:.2f}")
 
-    expected_tweets = os.path.join(project_root, "research", "tweets", f"{dt_to_filename(latest_time)}.json")
+    expected_tweets = os.path.join(project_root, "research", "data", "tweets", f"{dt_to_filename(latest_time)}.json")
     if os.path.exists(expected_tweets):
         tweets_path = expected_tweets
         print(f"[2/5] Tweets already cached → {tweets_path}")
@@ -243,12 +251,12 @@ def main():
         print(f"  → {tweets_path}")
 
     print("[3/5] Generating seed...")
-    seed_path = step_gen_seed(seed_candles, tweets_path, latest_time)
+    seed_path = step_gen_seed(seed_candles, tweets_path, latest_time, interval, limit)
     print(f"  → {seed_path}")
 
     print("[4/5] Running simulation...")
     step_run_trade(seed_path, output_csv,
-                   actual_candle["low"], actual_candle["high"], prev_mid)
+                   actual_candle["low"], actual_candle["high"], prev_mid, rounds)
 
     print("[5/5] Calculating metrics...")
     metrics_stdout = step_calc_metrics(output_csv)

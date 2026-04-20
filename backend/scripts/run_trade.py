@@ -93,11 +93,19 @@ def api(method, base_url, path, session=None, **kwargs):
 
 
 def count_agents_in_seed(seed_text):
-    """Count agent bullet entries under '# Agents Population' in seed.md."""
-    if "# Agents Population" in seed_text:
-        agents_section = seed_text.split("# Agents Population", 1)[1]
-        lines = [l for l in agents_section.splitlines() if l.strip().startswith("- ")]
-        return max(len(lines), 6)
+    """Count agent entries in '# Agent Population' section in seed.md."""
+    section_title = "# Agent Population"
+    if section_title in seed_text:
+        agents_section = seed_text.split(section_title, 1)[1]
+        try:
+            import json
+            bracket_start = agents_section.find("[")
+            bracket_end = agents_section.find("]")
+            if bracket_start != -1 and bracket_end != -1:
+                agents_json = json.loads(agents_section[bracket_start:bracket_end+1])
+                return len(agents_json)
+        except (json.JSONDecodeError, ValueError):
+            pass
     return 6
 
 
@@ -140,7 +148,7 @@ def extract_timestamp_from_seed_path(seed_path):
     if m:
         dt = datetime.strptime(m.group(1), "%Y-%m-%dT%H").replace(tzinfo=timezone.utc)
         return int(dt.timestamp())
-    m = re.search(r"(\d{4}-\d{2}-\d{2})-(\d{2})-(\d{2})\.md$", base)
+    m = re.search(r"(\d{4}-\d{2}-\d{2})-(\d{2})-(\d{2})", base)
     if m:
         dt = datetime.strptime(f"{m.group(1)} {m.group(2)}:{m.group(3)}", "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
         return int(dt.timestamp())

@@ -2,7 +2,7 @@
 - requirements: marketdata/2026-04-05/ohlcv.csv, news/2026-04-05T01.md
 - tweets: python3 backend/scripts/get_tweets.py --query bitcoin
 - ohlcv: python3 backend/scripts/get_ohlcv.py
-- gen real time seed: python3 backend/scripts/gen_realtime_seed.py --ohlcv ohlcv/2026-04-16-07-00.json --tweets tweets/2026-04-16.json
+- gen real time seed: python3 research/gen_realtime_seed.py --ohlcv research/data/ohlcv/2026-04-16-07-00.json --tweets research/data/tweets/2026-04-16.json
 - gen seed data: python3 backend/scripts/gen_seed.py --end-hour 2026-04-05T03 --hours 4 --count 3
 - run backend: cd backend && source .venv/bin/activate && python run.py
 - run prediction: ./run.sh 2026-04-05T01 10

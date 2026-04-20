@@ -37,15 +37,15 @@ def latest_file(directory: str, ext: str) -> str | None:
     return max(files, key=os.path.getmtime)
 
 
-def load_agents(agents_path: str | None = None) -> str:
+def load_agents(agents_path: str | None = None) -> list[dict]:
     if agents_path and os.path.exists(agents_path):
-        with open(agents_path) as f:
-            return f.read().strip()
-    default = os.path.join(project_root, "agents.txt")
+        with open(agents_path, encoding="utf-8") as f:
+            return json.load(f)
+    default = os.path.join(project_root, "research", "agents.txt")
     if os.path.exists(default):
-        with open(default) as f:
-            return f.read().strip()
-    return ""
+        with open(default, encoding="utf-8") as f:
+            return json.load(f)
+    return []
 
 
 def format_ohlcv(candles: list[dict]) -> str:
@@ -64,6 +64,10 @@ def format_tweets(tweets: list[dict]) -> str:
     return "# X Tweets\n" + json.dumps(items, ensure_ascii=False, indent=2)
 
 
+def format_agents(agents: list[dict]) -> str:
+    return "# Agent Population\n" + json.dumps(agents, ensure_ascii=False, indent=2)
+
+
 def main():
     parser = argparse.ArgumentParser(description="gen_realtime_seed — build seed from live OHLCV + tweets")
     parser.add_argument("--ohlcv", default=None,
@@ -79,7 +83,7 @@ def main():
     # Resolve ohlcv file
     ohlcv_path = args.ohlcv
     if not ohlcv_path:
-        ohlcv_path = latest_file(os.path.join(project_root, "ohlcv"), ".json")
+        ohlcv_path = latest_file(os.path.join(project_root, "research", "data", "ohlcv"), ".json")
     if not ohlcv_path or not os.path.exists(ohlcv_path):
         raise FileNotFoundError(f"No OHLCV file found. Run get_ohlcv.py first or pass --ohlcv.")
     ohlcv_path = os.path.join(project_root, ohlcv_path) if not os.path.isabs(ohlcv_path) else ohlcv_path
@@ -88,7 +92,7 @@ def main():
     tweets_path = args.tweets
     if not tweets_path:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        tweets_path = os.path.join(project_root, "tweets", f"{today}.json")
+        tweets_path = os.path.join(project_root, "research", "data", "tweets", f"{today}.json")
     if not os.path.exists(tweets_path):
         raise FileNotFoundError(f"No tweets file found at {tweets_path}. Run get_tweets.py first or pass --tweets.")
     tweets_path = os.path.join(project_root, tweets_path) if not os.path.isabs(tweets_path) else tweets_path
@@ -109,14 +113,14 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, filename)
 
-    agents_text = load_agents(args.agents)
+    agents = load_agents(args.agents)
 
     content = "\n\n".join([
         f"# Latest Chart Time\n{chart_time}",
         f"# Latest BTC Price\n{latest_price}",
         format_ohlcv(candles),
         format_tweets(tweets),
-        "# Agents Population\n" + agents_text,
+        format_agents(agents),
     ]) + "\n"
 
     with open(out_path, "w", encoding="utf-8") as f:

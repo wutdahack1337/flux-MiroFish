@@ -11,8 +11,8 @@ Metrics per row:
 Summary (appended to CSV):
   MAE    = mean AE across rows with full actual data
   MDA    = mean DA across rows with prev_mid available
-  b_low  = median(e_low)
-  b_high = median(e_high)
+  b_low  = mean(e_low) as %
+  b_high = mean(e_high) as %
 """
 
 import argparse
@@ -126,8 +126,8 @@ def main():
 
     mae = sum(ae_values) / len(ae_values) if ae_values else None
     mda = sum(da_values) / len(da_values) if da_values else None
-    b_low = sum(e_low_values) / len(e_low_values) * 10000 if e_low_values else None  # bps
-    b_high = sum(e_high_values) / len(e_high_values) * 10000 if e_high_values else None  # bps
+    b_low = sum(e_low_values) / len(e_low_values) * 100 if e_low_values else None  # %
+    b_high = sum(e_high_values) / len(e_high_values) * 100 if e_high_values else None  # %
 
     # Build output fieldnames: insert metrics after 'runtime' if present, else append
     out_fields = list(fieldnames)
@@ -157,11 +157,11 @@ def main():
             if len(cols) == 2 and cols[0] not in ("b_low", "b_high"):
                 f.write(line)
         if b_low is not None:
-            f.write(f"b_low,{b_low:.2f}bps\n")
+            f.write(f"b_low,{b_low:.4f}%\n")
         else:
             f.write("b_low,NA\n")
         if b_high is not None:
-            f.write(f"b_high,{b_high:.2f}bps\n")
+            f.write(f"b_high,{b_high:.4f}%\n")
         else:
             f.write("b_high,NA\n")
 
@@ -176,11 +176,11 @@ def main():
     else:
         print("MDA=NA")
     if b_low is not None:
-        print(f"b_low={b_low:.2f}bps")
+        print(f"b_low={b_low:.4f}%")
     else:
         print("b_low=NA")
     if b_high is not None:
-        print(f"b_high={b_high:.2f}bps")
+        print(f"b_high={b_high:.4f}%")
     else:
         print("b_high=NA")
 

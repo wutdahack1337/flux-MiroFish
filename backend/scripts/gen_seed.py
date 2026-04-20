@@ -207,13 +207,17 @@ def format_news(news_content: str) -> str:
 
 def load_agents(agents_path=None):
     if agents_path and os.path.exists(agents_path):
-        with open(agents_path) as f:
-            return f.read().strip()
-    default = os.path.join(project_root, "agents.txt")
+        with open(agents_path, encoding="utf-8") as f:
+            return json.load(f)
+    default = os.path.join(project_root, "research", "agents.txt")
     if os.path.exists(default):
-        with open(default) as f:
-            return f.read().strip()
-    return ""  # Empty fallback if agents.txt not found
+        with open(default, encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+
+def format_agents(agents):
+    return "# Agents Population\n" + json.dumps(agents, ensure_ascii=False, indent=2)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────
@@ -234,7 +238,7 @@ def main():
     parser.add_argument("--marketdata", default=None,
                         help="Path to marketdata directory (default: <project_root>/marketdata)")
     parser.add_argument("--agents", default=None,
-                        help="Optional agents file path (default: <project_root>/agents.txt)")
+                        help="Optional agents file path (default: <project_root>/research/agents.txt)")
     parser.add_argument("--output-dir", default=None,
                         help="Directory for output seed files (default: seeds/)")
     parser.add_argument("--news", default=None,
@@ -247,7 +251,7 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     end_dt = parse_hour(args.end_hour)
-    agents_text = load_agents(args.agents)
+    agents = load_agents(args.agents)
 
     # Seeds: end_dt - (count-1)*step, ..., end_dt - step, end_dt
     seed_end_times = [
@@ -278,7 +282,7 @@ def main():
             format_ohlcv_json(candles),
             format_liquidations_json(liq),
             format_news(news_content),
-            "# Agents Population\n" + agents_text,
+            format_agents(agents),
         ]) + "\n"
 
         with open(out_path, "w") as f:
