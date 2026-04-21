@@ -154,8 +154,16 @@ def main():
         f.write("\n")
         for line in summary_lines:
             cols = line.strip().split(",")
-            if len(cols) == 2 and cols[0] not in ("b_low", "b_high"):
+            if len(cols) == 2 and cols[0] not in ("b_low", "b_high", "MAE", "MDA", "total_runtime_mins"):
                 f.write(line)
+        if mae is not None:
+            f.write(f"MAE,{mae:.4f}\n")
+        else:
+            f.write("MAE,NA\n")
+        if mda is not None:
+            f.write(f"MDA,{mda:.6f}\n")
+        else:
+            f.write("MDA,NA\n")
         if b_low is not None:
             f.write(f"b_low,{b_low:.4f}%\n")
         else:

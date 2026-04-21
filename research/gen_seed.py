@@ -54,6 +54,13 @@ def parse_interval(interval: str) -> tuple[timedelta, str]:
     raise ValueError(f"Unknown unit '{unit}'")
 
 
+def floor_to_interval(dt: datetime, delta: timedelta) -> datetime:
+    """Floor dt down to the nearest delta boundary in UTC."""
+    seconds = int(delta.total_seconds())
+    floored = int(dt.timestamp()) // seconds * seconds
+    return datetime.fromtimestamp(floored, tz=timezone.utc)
+
+
 def load_ohlcv_for_date(date_str: str, interval: str) -> list[dict]:
     path = os.path.join(project_root, "research", "data", "ohlcv",
                         f"{date_str}-{interval}.json")
@@ -99,11 +106,13 @@ def generate(
     output_dir: str = None,
     tweet_limit: int = 5,
     agents_limit: int = 0,
+    roll_step: str = None,
 ) -> int:
     """Generate seed/label pairs. Returns count of pairs written."""
     start_dt = datetime.strptime(start, "%Y-%m-%d-%H-%M").replace(tzinfo=timezone.utc)
     end_dt = datetime.strptime(end, "%Y-%m-%d-%H-%M").replace(tzinfo=timezone.utc)
     delta, interval_label = parse_interval(interval)
+    step_delta = parse_interval(roll_step)[0] if roll_step else delta
 
     out_dir = os.path.join(project_root, output_dir or os.path.join("research", "seeds"))
     os.makedirs(out_dir, exist_ok=True)
@@ -124,28 +133,29 @@ def generate(
             loaded_dates.add(date_str)
         cur += delta
 
-    all_times = sorted(candle_map.keys())
-    time_index = {t: i for i, t in enumerate(all_times)}
-
     tweet_cache: dict[str, list] = {}
     count = 0
 
     cur = start_dt
     while cur <= end_dt:
-        time_str = cur.strftime("%Y-%m-%d %H:%M")
-        t1_str = (cur + delta).strftime("%Y-%m-%d %H:%M")
+        latest_dt = floor_to_interval(cur, step_delta)
+        time_str = latest_dt.strftime("%Y-%m-%d %H:%M")
+        t1_str = (latest_dt + step_delta).strftime("%Y-%m-%d %H:%M")
 
         if time_str not in candle_map or t1_str not in candle_map:
-            cur += delta
+            cur += step_delta
             continue
 
-        idx = time_index[time_str]
-        start_idx = max(0, idx - limit + 1)
-        window = [candle_map[t] for t in all_times[start_idx:idx + 1]]
-
-        if len(window) < limit:
-            cur += delta
+        # Keep candle interval spacing (e.g. 4h) while rolling seed timestamps (e.g. 1h).
+        needed_times = [
+            (latest_dt - delta * i).strftime("%Y-%m-%d %H:%M")
+            for i in range(limit - 1, -1, -1)
+        ]
+        if any(t not in candle_map for t in needed_times):
+            cur += step_delta
             continue
+
+        window = [candle_map[t] for t in needed_times]
 
         earliest_day = datetime.strptime(min(t["time"][:10] for t in window), "%Y-%m-%d") - timedelta(days=1)
         window_days = sorted({t["time"][:10] for t in window} | {cur.strftime("%Y-%m-%d")} | {earliest_day.strftime("%Y-%m-%d")})
@@ -154,7 +164,7 @@ def generate(
                 tweet_cache[d] = load_tweets_for_day(d)
         day_tweets = [t for d in window_days for t in tweet_cache[d]]
 
-        cutoff = time_str.replace(" ", "T")
+        cutoff = cur.strftime("%Y-%m-%dT%H:%M")
         tweet_count = min(len([t for t in day_tweets if t.get("createdAt", "") <= cutoff]), tweet_limit)
         agent_count = len(agents)
         day_dir = os.path.join(out_dir, cur.strftime("%Y-%m-%d"))
@@ -164,7 +174,7 @@ def generate(
         label_path = os.path.join(day_dir, f"{cur.strftime('%Y-%m-%d-%H-%M')}-{interval_label}-label.json")
 
         seed_content = "\n\n".join([
-            f"# Latest Chart Time\n{time_str}",
+            f"# Latest Chart Time\n{cur.strftime('%Y-%m-%d %H:%M')}",
             f"# Latest BTC Price\n{candle_map[time_str]['close']}",
             format_ohlcv(window, interval_label),
             format_tweets(day_tweets, cur, tweet_limit),
@@ -178,7 +188,7 @@ def generate(
             json.dump(candle_map[t1_str], f, ensure_ascii=False, indent=2)
 
         count += 1
-        cur += delta
+        cur += step_delta
 
     print(f"Generated {count} seed/label pairs → {out_dir}")
     return count
@@ -190,6 +200,8 @@ def main():
     parser.add_argument("--end", default=os.getenv("SEED_END"), help="End candle time YYYY-MM-DD-HH-MM")
     parser.add_argument("--limit", type=int, default=int(os.getenv("LIMIT", "24")), help="Candles per seed window")
     parser.add_argument("--interval", default=os.getenv("INTERVAL", "1h"), help="Candle interval e.g. 1h, 30m, 1d, 2h")
+    parser.add_argument("--roll-step", default=None,
+                        help="Seed rolling step e.g. 1h. Default follows --interval")
     parser.add_argument("--agents", default=None, help="Path to agents JSON")
     parser.add_argument("--output-dir", default=None, help="Output directory (default: research/seeds)")
     args = parser.parse_args()
@@ -206,6 +218,7 @@ def main():
         output_dir=args.output_dir,
         tweet_limit=int(os.getenv("TWEET_LIMIT", "5")),
         agents_limit=int(os.getenv("AGENTS", "0")),
+        roll_step=args.roll_step,
     )
 
 

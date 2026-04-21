@@ -824,8 +824,8 @@ class SimulationRunner:
         if not state:
             raise ValueError(f"Simulation does not exist: {simulation_id}")
         
-        if state.runner_status not in [RunnerStatus.RUNNING, RunnerStatus.PAUSED]:
-            raise ValueError(f"Simulation not running: {simulation_id}, status={state.runner_status}")
+        if state.runner_status == RunnerStatus.STOPPING:
+            raise ValueError(f"Simulation already stopping: {simulation_id}")
         
         state.runner_status = RunnerStatus.STOPPING
         cls._save_run_state(state)

@@ -12,6 +12,7 @@ from typing import Any
 
 from zep_cloud import InternalServerError
 from zep_cloud.client import Zep
+from zep_cloud.core.api_error import ApiError
 
 from .logger import get_logger
 
@@ -41,6 +42,15 @@ def _fetch_page_with_retry(
     for attempt in range(max_retries):
         try:
             return api_call(*args, **kwargs)
+        except ApiError as e:
+            if e.status_code != 429:
+                raise
+            retry_after = float(e.headers.get("retry-after", delay)) if e.headers else delay
+            last_exception = e
+            logger.warning(
+                f"Zep {page_description} rate-limited (429), waiting {retry_after:.0f}s (attempt {attempt + 1}/{max_retries})..."
+            )
+            time.sleep(retry_after)
         except (ConnectionError, TimeoutError, OSError, InternalServerError) as e:
             last_exception = e
             if attempt < max_retries - 1:

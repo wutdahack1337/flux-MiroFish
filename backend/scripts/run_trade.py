@@ -428,7 +428,7 @@ def _interview_agents(base_url, simulation_id, seed_text, predict_hours, id_to_p
         "Format: range_low,range_high"
     )
 
-    interview_timeout = max(30, agent_count * 8)
+    interview_timeout = max(60, agent_count * 15)
     interview_result = api("post", base_url, "/api/simulation/interview/all",
                            session=session, json={
                                "simulation_id": simulation_id,
@@ -500,6 +500,15 @@ def _fallback_persona_decisions(llm, seed_text, id_to_profile, predict_hours):
     return forecasts
 
 
+def stop_simulation(base_url, simulation_id, session=None):
+    """Stop the simulation process so it doesn't linger in the background."""
+    try:
+        api("post", base_url, "/api/simulation/stop",
+            session=session, json={"simulation_id": simulation_id})
+    except Exception:
+        pass  # best-effort; don't fail the pipeline over a cleanup call
+
+
 def step5_interview_for_trades(base_url, simulation_id, llm, seed_text, predict_hours, session=None):
     """Interview each agent for price range forecast, return list of forecast dicts."""
     print("[Step 5/5] Interviewing agents for price forecasts...")
@@ -519,13 +528,13 @@ def step5_interview_for_trades(base_url, simulation_id, llm, seed_text, predict_
         # The monitor thread sets runner_status="completed" from action logs *before* the
         # simulation process calls ipc_handler.update_status("alive"), creating a race window.
         env_status_alive = False
-        for _ in range(60):  # up to 30 seconds (0.5s interval)
+        for _ in range(60):  # up to 60 seconds (1s interval)
             env_check = api("post", base_url, "/api/simulation/env-status",
                             session=session, json={"simulation_id": simulation_id})
             if env_check.get("env_alive"):
                 env_status_alive = True
                 break
-            time.sleep(0.5)
+            time.sleep(1)
         if not env_status_alive:
             print(f"  Environment not ready for interview (timed out waiting for alive status)")
         else:
@@ -659,6 +668,7 @@ def main():
     sim_result = step4_run_simulation(args.base_url, simulation_id, max_rounds=args.rounds, session=session)
     forecasts = step5_interview_for_trades(args.base_url, simulation_id, llm, seed_text,
                                            args.predict_hours, session=session)
+    stop_simulation(args.base_url, simulation_id, session=session)
 
     source_agent_count = len(forecasts)
 
