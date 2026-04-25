@@ -7,6 +7,7 @@ Use preset scripts + LLM intelligent generation of config parameters
 import os
 import json
 import shutil
+import concurrent.futures
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -300,135 +301,119 @@ class SimulationManager:
                 self._save_simulation_state(state)
                 return state
             
-            # ========== Phase 2: Generate Agent Profile ==========
+            # ========== Phase 2 + 3: Generate profiles and config in parallel ==========
             total_entities = len(filtered.entities)
-            
+
             if progress_callback:
                 progress_callback(
-                    "generating_profiles", 0, 
+                    "generating_profiles", 0,
                     "Starting generation...",
                     current=0,
                     total=total_entities
                 )
-            
+
+            # --- Profile generation task ---
             # Pass graph_id to enable graph retrieval functionality, get richer context
-            generator = OasisProfileGenerator(graph_id=state.graph_id)
-            
-            def profile_progress(current, total, msg):
+            def _generate_profiles():
+                generator = OasisProfileGenerator(graph_id=state.graph_id)
+
+                def profile_progress(current, total, msg):
+                    if progress_callback:
+                        progress_callback(
+                            "generating_profiles",
+                            int(current / total * 100),
+                            msg,
+                            current=current,
+                            total=total,
+                            item_name=msg
+                        )
+
+                # Set real-time save file path (prefer Reddit JSON format)
+                realtime_output_path = None
+                realtime_platform = "reddit"
+                if state.enable_reddit:
+                    realtime_output_path = os.path.join(sim_dir, "reddit_profiles.json")
+                    realtime_platform = "reddit"
+                elif state.enable_twitter:
+                    realtime_output_path = os.path.join(sim_dir, "twitter_profiles.csv")
+                    realtime_platform = "twitter"
+
+                profiles = generator.generate_profiles_from_entities(
+                    entities=filtered.entities,
+                    use_llm=use_llm_for_profiles,
+                    progress_callback=profile_progress,
+                    graph_id=state.graph_id,
+                    parallel_count=parallel_profile_count,
+                    realtime_output_path=realtime_output_path,
+                    output_platform=realtime_platform
+                )
+
+                # Save Profile files (Note: Twitter uses CSV format, Reddit uses JSON format)
+                # Reddit has been saved in real-time during generation, save once more here to ensure completeness
+                if state.enable_reddit:
+                    generator.save_profiles(
+                        profiles=profiles,
+                        file_path=os.path.join(sim_dir, "reddit_profiles.json"),
+                        platform="reddit"
+                    )
+                if state.enable_twitter:
+                    generator.save_profiles(
+                        profiles=profiles,
+                        file_path=os.path.join(sim_dir, "twitter_profiles.csv"),
+                        platform="twitter"
+                    )
+                return profiles
+
+            # --- Config generation task ---
+            def _generate_config():
                 if progress_callback:
                     progress_callback(
-                        "generating_profiles", 
-                        int(current / total * 100), 
-                        msg,
-                        current=current,
-                        total=total,
-                        item_name=msg
+                        "generating_config", 0,
+                        "Analyzing simulation requirements...",
+                        current=0,
+                        total=3
                     )
-            
-            # Set real-time save file path (prefer Reddit JSON format)
-            realtime_output_path = None
-            realtime_platform = "reddit"
-            if state.enable_reddit:
-                realtime_output_path = os.path.join(sim_dir, "reddit_profiles.json")
-                realtime_platform = "reddit"
-            elif state.enable_twitter:
-                realtime_output_path = os.path.join(sim_dir, "twitter_profiles.csv")
-                realtime_platform = "twitter"
-            
-            profiles = generator.generate_profiles_from_entities(
-                entities=filtered.entities,
-                use_llm=use_llm_for_profiles,
-                progress_callback=profile_progress,
-                graph_id=state.graph_id,  # Pass graph_id for graph retrieval
-                parallel_count=parallel_profile_count,  # Parallel generation count
-                realtime_output_path=realtime_output_path,  # Real-time save path
-                output_platform=realtime_platform  # Output format
-            )
-            
+                config_generator = SimulationConfigGenerator()
+                return config_generator.generate_config(
+                    simulation_id=simulation_id,
+                    project_id=state.project_id,
+                    graph_id=state.graph_id,
+                    simulation_requirement=simulation_requirement,
+                    document_text=document_text,
+                    entities=filtered.entities,
+                    enable_twitter=state.enable_twitter,
+                    enable_reddit=state.enable_reddit
+                )
+
+            # Run both in parallel
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                profile_future = pool.submit(_generate_profiles)
+                config_future = pool.submit(_generate_config)
+
+                profiles = profile_future.result()
+                sim_params = config_future.result()
+
             state.profiles_count = len(profiles)
-            
-            # Save Profile files (Note: Twitter uses CSV format, Reddit uses JSON format)
-            # Reddit has been saved in real-time during generation, save once more here to ensure completeness
+
             if progress_callback:
                 progress_callback(
-                    "generating_profiles", 95, 
-                    "Saving Profile files...",
-                    current=total_entities,
-                    total=total_entities
-                )
-            
-            if state.enable_reddit:
-                generator.save_profiles(
-                    profiles=profiles,
-                    file_path=os.path.join(sim_dir, "reddit_profiles.json"),
-                    platform="reddit"
-                )
-            
-            if state.enable_twitter:
-                # Twitter uses CSV format! This is OASIS requirement
-                generator.save_profiles(
-                    profiles=profiles,
-                    file_path=os.path.join(sim_dir, "twitter_profiles.csv"),
-                    platform="twitter"
-                )
-            
-            if progress_callback:
-                progress_callback(
-                    "generating_profiles", 100, 
+                    "generating_profiles", 100,
                     f"Completed, total {len(profiles)} Profiles",
                     current=len(profiles),
                     total=len(profiles)
                 )
-            
-            # ========== Phase 3: LLM intelligent generation of simulation config ==========
-            if progress_callback:
-                progress_callback(
-                    "generating_config", 0, 
-                    "Analyzing simulation requirements...",
-                    current=0,
-                    total=3
-                )
-            
-            config_generator = SimulationConfigGenerator()
-            
-            if progress_callback:
-                progress_callback(
-                    "generating_config", 30, 
-                    "Calling LLM to generate config...",
-                    current=1,
-                    total=3
-                )
-            
-            sim_params = config_generator.generate_config(
-                simulation_id=simulation_id,
-                project_id=state.project_id,
-                graph_id=state.graph_id,
-                simulation_requirement=simulation_requirement,
-                document_text=document_text,
-                entities=filtered.entities,
-                enable_twitter=state.enable_twitter,
-                enable_reddit=state.enable_reddit
-            )
-            
-            if progress_callback:
-                progress_callback(
-                    "generating_config", 70, 
-                    "Saving config files...",
-                    current=2,
-                    total=3
-                )
-            
+
             # Save config files
             config_path = os.path.join(sim_dir, "simulation_config.json")
             with open(config_path, 'w', encoding='utf-8') as f:
                 f.write(sim_params.to_json())
-            
+
             state.config_generated = True
             state.config_reasoning = sim_params.generation_reasoning
-            
+
             if progress_callback:
                 progress_callback(
-                    "generating_config", 100, 
+                    "generating_config", 100,
                     "Config generation completed",
                     current=3,
                     total=3

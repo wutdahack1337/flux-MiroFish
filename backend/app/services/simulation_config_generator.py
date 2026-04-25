@@ -12,6 +12,7 @@ Adopt step-by-step generation strategy to avoid failures from generating too lon
 
 import json
 import math
+import concurrent.futures
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -304,25 +305,38 @@ class SimulationConfigGenerator:
         event_config = self._parse_event_config(event_config_result)
         reasoning_parts.append(f"Event config: {event_config_result.get('reasoning', 'Success')}")
 
-        # ========== Step 3-N: Generate agent configurations in batches ==========
+        # ========== Step 3-N: Generate agent configurations in batches (parallel) ==========
         all_agent_configs = []
+        batches = []
         for batch_idx in range(num_batches):
             start_idx = batch_idx * self.AGENTS_PER_BATCH
             end_idx = min(start_idx + self.AGENTS_PER_BATCH, len(entities))
-            batch_entities = entities[start_idx:end_idx]
+            batches.append((batch_idx, entities[start_idx:end_idx], start_idx))
 
-            report_progress(
-                3 + batch_idx,
-                f"Generating agent configuration ({start_idx + 1}-{end_idx}/{len(entities)})..."
-            )
-            
-            batch_configs = self._generate_agent_configs_batch(
-                context=context,
-                entities=batch_entities,
-                start_idx=start_idx,
-                simulation_requirement=simulation_requirement
-            )
-            all_agent_configs.extend(batch_configs)
+        report_progress(3, f"Generating agent configurations ({len(entities)} agents, {num_batches} batches)...")
+
+        if num_batches <= 1:
+            # Single batch — no threading overhead needed
+            for batch_idx, batch_entities, start_idx in batches:
+                batch_configs = self._generate_agent_configs_batch(
+                    context=context, entities=batch_entities,
+                    start_idx=start_idx, simulation_requirement=simulation_requirement
+                )
+                all_agent_configs.extend(batch_configs)
+        else:
+            # Multiple batches — run in parallel
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_batches) as pool:
+                futures = [
+                    pool.submit(
+                        self._generate_agent_configs_batch,
+                        context=context, entities=batch_entities,
+                        start_idx=start_idx, simulation_requirement=simulation_requirement
+                    )
+                    for _, batch_entities, start_idx in batches
+                ]
+                # Collect in order to preserve agent_id sequence
+                for future in futures:
+                    all_agent_configs.extend(future.result())
         
         reasoning_parts.append(f"Agent config: Successfully generated {len(all_agent_configs)}")
 

@@ -10,13 +10,19 @@ import threading
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass
 
+from zep_cloud import InternalServerError
 from zep_cloud.client import Zep
 from zep_cloud import EpisodeData, EntityEdgeSourceTarget
 
 from ..config import Config
 from ..models.task import TaskManager, TaskStatus
+from ..utils.logger import get_logger
+from ..utils.retry import RetryableAPIClient
 from ..utils.zep_paging import fetch_all_nodes, fetch_all_edges
 from .text_processor import TextProcessor
+
+
+logger = get_logger('mirofish.graph_builder')
 
 
 @dataclass
@@ -49,6 +55,55 @@ class GraphBuilderService:
         
         self.client = Zep(api_key=self.api_key)
         self.task_manager = TaskManager()
+        self.retry_client = RetryableAPIClient(
+            max_retries=int(os.environ.get("ZEP_RETRY_MAX_RETRIES", "3")),
+            initial_delay=float(os.environ.get("ZEP_RETRY_INITIAL_DELAY", "1.5")),
+            max_delay=float(os.environ.get("ZEP_RETRY_MAX_DELAY", "12")),
+            backoff_factor=2.0,
+        )
+        self.retryable_exceptions = self._get_retryable_exceptions()
+
+    @staticmethod
+    def _get_retryable_exceptions():
+        """Collect transient network exception types for Zep API calls."""
+        exceptions = [ConnectionError, TimeoutError, OSError, InternalServerError]
+
+        try:
+            import httpx
+            exceptions.extend([
+                httpx.TimeoutException,
+                httpx.NetworkError,
+                httpx.ReadTimeout,
+                httpx.ConnectError,
+            ])
+        except Exception:
+            pass
+
+        try:
+            import requests
+            exceptions.extend([
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+            ])
+        except Exception:
+            pass
+
+        try:
+            from urllib3.exceptions import ProtocolError
+            exceptions.append(ProtocolError)
+        except Exception:
+            pass
+
+        return tuple(dict.fromkeys(exceptions))
+
+    def _call_zep_with_retry(self, func: Callable, *args, operation: str, **kwargs):
+        """Execute a Zep API call with retry on transient transport failures."""
+        return self.retry_client.call_with_retry(
+            func,
+            *args,
+            exceptions=self.retryable_exceptions,
+            **kwargs,
+        )
     
     def build_graph_async(
         self,
@@ -188,10 +243,12 @@ class GraphBuilderService:
         """Create a Zep graph (public method)"""
         graph_id = f"mirofish_{uuid.uuid4().hex[:16]}"
         
-        self.client.graph.create(
+        self._call_zep_with_retry(
+            self.client.graph.create,
             graph_id=graph_id,
             name=name,
-            description="MiroFish Social Simulation Graph"
+            description="MiroFish Social Simulation Graph",
+            operation=f"create_graph(graph_id={graph_id})",
         )
         
         return graph_id
@@ -209,7 +266,13 @@ class GraphBuilderService:
         
         # Zep reserved names cannot be used as attribute names
         RESERVED_NAMES = {'uuid', 'name', 'group_id', 'name_embedding', 'summary', 'created_at'}
-        
+
+        def to_pascal_case(s: str) -> str:
+            """Convert any casing (snake_case, camelCase, space-separated) to PascalCase."""
+            import re as _re
+            parts = _re.split(r'[\s_\-]+', s)
+            return ''.join(p[0].upper() + p[1:] if p else '' for p in parts if p)
+
         def safe_attr_name(attr_name: str) -> str:
             """Convert reserved names to safe attribute names"""
             if attr_name.lower() in RESERVED_NAMES:
@@ -219,7 +282,7 @@ class GraphBuilderService:
         # Dynamically create entity types
         entity_types = {}
         for entity_def in ontology.get("entity_types", []):
-            name = entity_def["name"]
+            name = to_pascal_case(entity_def["name"])
             description = entity_def.get("description", f"A {name} entity.")
             
             # Create attributes dict and type annotations (required by Pydantic v2)
@@ -243,7 +306,7 @@ class GraphBuilderService:
         # Dynamically create edge types
         edge_definitions = {}
         for edge_def in ontology.get("edge_types", []):
-            name = edge_def["name"]
+            name = to_pascal_case(edge_def["name"])
             description = edge_def.get("description", f"A {name} relationship.")
             
             # Create attributes dict and type annotations
@@ -259,9 +322,7 @@ class GraphBuilderService:
             
             attrs["__annotations__"] = annotations
             
-            # Dynamically create class
-            class_name = ''.join(word.capitalize() for word in name.split('_'))
-            edge_class = type(class_name, (EdgeModel,), attrs)
+            edge_class = type(name, (EdgeModel,), attrs)
             edge_class.__doc__ = description
             
             # Build source_targets
@@ -269,8 +330,8 @@ class GraphBuilderService:
             for st in edge_def.get("source_targets", []):
                 source_targets.append(
                     EntityEdgeSourceTarget(
-                        source=st.get("source", "Entity"),
-                        target=st.get("target", "Entity")
+                        source=to_pascal_case(st.get("source", "Entity")),
+                        target=to_pascal_case(st.get("target", "Entity"))
                     )
                 )
             
@@ -279,10 +340,12 @@ class GraphBuilderService:
         
         # Call Zep API to set ontology
         if entity_types or edge_definitions:
-            self.client.graph.set_ontology(
+            self._call_zep_with_retry(
+                self.client.graph.set_ontology,
                 graph_ids=[graph_id],
                 entities=entity_types if entity_types else None,
                 edges=edge_definitions if edge_definitions else None,
+                operation=f"set_ontology(graph_id={graph_id})",
             )
     
     def add_text_batches(
@@ -316,9 +379,11 @@ class GraphBuilderService:
             
             # Send to Zep
             try:
-                batch_result = self.client.graph.add_batch(
+                batch_result = self._call_zep_with_retry(
+                    self.client.graph.add_batch,
                     graph_id=graph_id,
-                    episodes=episodes
+                    episodes=episodes,
+                    operation=f"add_batch(graph_id={graph_id}, batch={batch_num}/{total_batches})",
                 )
                 
                 # Collect returned episode UUIDs
@@ -329,7 +394,7 @@ class GraphBuilderService:
                             episode_uuids.append(ep_uuid)
                 
                 # Avoid sending requests too quickly
-                time.sleep(1)
+                time.sleep(0.5)
                 
             except Exception as e:
                 if progress_callback:
@@ -370,7 +435,11 @@ class GraphBuilderService:
             # Check processing status for each episode
             for ep_uuid in list(pending_episodes):
                 try:
-                    episode = self.client.graph.episode.get(uuid_=ep_uuid)
+                    episode = self._call_zep_with_retry(
+                        self.client.graph.episode.get,
+                        uuid_=ep_uuid,
+                        operation=f"episode_get(uuid={ep_uuid})",
+                    )
                     is_processed = getattr(episode, 'processed', False)
                     
                     if is_processed:
@@ -389,7 +458,7 @@ class GraphBuilderService:
                 )
             
             if pending_episodes:
-                time.sleep(3)  # Check every 3 seconds
+                time.sleep(1.5) # Check every 1.5 seconds
         
         if progress_callback:
             progress_callback(f"Processing complete: {completed_count}/{total_episodes}", 1.0)

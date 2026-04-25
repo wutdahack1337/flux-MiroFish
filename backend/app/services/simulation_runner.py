@@ -309,6 +309,47 @@ class SimulationRunner:
         cls._run_states[state.simulation_id] = state
     
     @classmethod
+    def _cleanup_old_simulation_processes(cls, simulation_id: str) -> None:
+        """
+        Kill any lingering processes for this simulation_id
+
+        This prevents multiple processes from running simultaneously for the same
+        simulation, which can cause race conditions and state corruption.
+        """
+        import subprocess as sp
+        try:
+            # Use pgrep to find all Python processes running the simulation script
+            # with this specific simulation config
+            sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
+            config_path = os.path.join(sim_dir, "simulation_config.json")
+
+            # Find processes by config file path
+            result = sp.run(
+                ["pgrep", "-f", config_path],
+                capture_output=True,
+                text=True
+            )
+
+            if result.stdout:
+                pids = [int(pid) for pid in filter(None, result.stdout.strip().split('\n'))]
+                for pid in pids:
+                    try:
+                        # Try graceful termination first
+                        os.killpg(os.getpgid(pid), signal.SIGTERM)
+                        logger.info(f"Terminated simulation process {pid} for {simulation_id}")
+                    except (ProcessLookupError, OSError) as e:
+                        logger.debug(f"Failed to terminate {pid}: {e}")
+                        try:
+                            # Give process time to exit gracefully before force kill
+                            time.sleep(0.5)
+                            # Force kill if graceful termination fails
+                            os.killpg(os.getpgid(pid), signal.SIGKILL)
+                        except (ProcessLookupError, OSError):
+                            pass
+        except Exception as e:
+            logger.warning(f"Error during cleanup of old processes: {e}")
+
+    @classmethod
     def start_simulation(
         cls,
         simulation_id: str,
@@ -334,7 +375,15 @@ class SimulationRunner:
         existing = cls.get_run_state(simulation_id)
         if existing and existing.runner_status in [RunnerStatus.RUNNING, RunnerStatus.STARTING]:
             raise ValueError(f"Simulation already running: {simulation_id}")
-        
+
+        # Clean up any lingering processes from previous runs
+        # This is critical because: when simulation completes, it enters wait mode.
+        # If run again (cache reuse), multiple processes can start for same simulation_id,
+        # causing conflicts where multiple processes update env_status.json,
+        # resulting in the status being set to "stopped" unexpectedly.
+        cls._cleanup_old_simulation_processes(simulation_id)
+        logger.info(f"Cleaned up old processes for {simulation_id}")
+
         # Load simulation config
         sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
         config_path = os.path.join(sim_dir, "simulation_config.json")
@@ -775,8 +824,8 @@ class SimulationRunner:
         if not state:
             raise ValueError(f"Simulation does not exist: {simulation_id}")
         
-        if state.runner_status not in [RunnerStatus.RUNNING, RunnerStatus.PAUSED]:
-            raise ValueError(f"Simulation not running: {simulation_id}, status={state.runner_status}")
+        if state.runner_status == RunnerStatus.STOPPING:
+            raise ValueError(f"Simulation already stopping: {simulation_id}")
         
         state.runner_status = RunnerStatus.STOPPING
         cls._save_run_state(state)
