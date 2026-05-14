@@ -1,3 +1,19 @@
+logs/
+marketdata/
+price_predict/
+.tmp
+test*.py
+docs/
+plot/
+seeds/
+research/data/
+research/predictions/
+predictions/
+# Seed graph-id cache
+**/.cache/
+
+#####################
+
 # OS
 .DS_Store
 Thumbs.db
